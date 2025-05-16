@@ -1,0 +1,27 @@
+# Ignore all CSV files
+*.csv
+
+# Ignore Jupyter notebooks
+*.ipynb
+
+# Ignore Python cache and virtual environment files
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# Ignore log files
+*.log
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore data/output folders (optional, uncomment if needed)
+# /data/
+# /output/
