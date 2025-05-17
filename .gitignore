@@ -1,6 +1,9 @@
 # Ignore all CSV files
 *.csv
 
+# Ignore JSON files
+*.json
+
 # Ignore Jupyter notebooks
 *.ipynb
 
