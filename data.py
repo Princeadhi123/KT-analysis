@@ -1,6 +1,6 @@
 """Optimized data handling for Knowledge Tracing."""
 
-from typing import Dict, List, Tuple, Optional, Iterator
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from pathlib import Path
 

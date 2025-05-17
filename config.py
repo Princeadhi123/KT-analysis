@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-import os
+
+
 
 @dataclass
 class ModelConfig:
@@ -28,8 +29,8 @@ class Paths:
     best_model_path: Path = checkpoint_dir / "best_model.ckpt"
     skill_mapping_path: Path = checkpoint_dir / "skill_mapping.json"
 
-    def __post_init__(self):
-        # Create necessary directories
+    def __post_init__(self) -> None:
+        """Ensure necessary directories exist."""
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 

@@ -25,7 +25,13 @@ class PreprocessingStats:
     processing_time_seconds: float
     memory_used_mb: float
 def create_skill_mapping(df: pd.DataFrame) -> Dict[int, int]:
-    """Create mapping of original skill IDs to consecutive integers."""
+    """
+    Create mapping of original skill IDs to consecutive integers.
+    Args:
+        df (pd.DataFrame): DataFrame containing 'skill_id' column.
+    Returns:
+        Dict[int, int]: Mapping from original skill IDs to consecutive integers.
+    """
     unique_skills = df['skill_id'].unique()
     return {skill: idx for idx, skill in enumerate(sorted(unique_skills))}
 

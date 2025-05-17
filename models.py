@@ -47,21 +47,20 @@ class DKT(pl.LightningModule):
         self.learning_rate = learning_rate
 
     def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
-        # Combine skill and correctness into single input
+        """
+        Forward pass for DKT model.
+        Args:
+            batch (Dict[str, torch.Tensor]): Batch of input tensors.
+        Returns:
+            torch.Tensor: Model output logits.
+        """
         x = batch.skill_ids * 2 + batch.correct
         x = self.embedding(x)
         
-        # Get sequence lengths for packing
         lengths = batch.mask.sum(1).cpu()
-        
-        # Pack sequence for efficient computation
         packed = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
-        
-        # Process through LSTM
         output, _ = self.lstm(packed)
         output, _ = pad_packed_sequence(output, batch_first=True)
-        
-        # Apply dropout and final layer
         output = self.dropout(output)
         return self.output(output)
 

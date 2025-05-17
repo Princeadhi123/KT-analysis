@@ -15,6 +15,15 @@ build/
 venv/
 .env
 
+# Ignore tuning results
+tuning_results/
+
+# Ignore model checkpoints
+checkpoints/
+
+# Ignore lightning logs
+lightning_logs/
+
 # Ignore log files
 *.log
 

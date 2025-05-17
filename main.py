@@ -8,7 +8,13 @@ from models import DKT
 from config import MODEL_CONFIG, TRAINING_CONFIG, PATHS
 
 def count_unique_skills(data_path: Path) -> int:
-    """Count number of unique skills in the dataset."""
+    """
+    Count number of unique skills in the dataset.
+    Args:
+        data_path (Path): Path to the dataset CSV file.
+    Returns:
+        int: Number of unique skills.
+    """
     df = pd.read_csv(data_path)
     return df['skill_id'].nunique()
 
