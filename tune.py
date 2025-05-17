@@ -36,24 +36,28 @@ def objective(trial) -> float:
     start_time = time.time()
     logger.info(f"\n{'='*50}\nStarting trial {trial.number + 1}\n{'='*50}")
     
-    # Suggest hyperparameters (with reduced search space for faster tuning)
-    hidden_dim = trial.suggest_int('hidden_dim', 32, 128)
-    num_layers = trial.suggest_int('num_layers', 1, 2)
-    dropout = trial.suggest_float('dropout', 0.1, 0.3)
-    learning_rate = trial.suggest_loguniform('learning_rate', 1e-3, 1e-2)
+    # Suggest hyperparameters (expanded search space for better tuning)
+    hidden_dim = trial.suggest_int('hidden_dim', 32, 256)
+    num_layers = trial.suggest_int('num_layers', 1, 4)
+    dropout = trial.suggest_float('dropout', 0.05, 0.5)
+    learning_rate = trial.suggest_loguniform('learning_rate', 1e-4, 5e-2)
+    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64, 128])
+    max_seq_len = trial.suggest_categorical('max_seq_len', [25, 50, 100, 200])
     
     logger.info(f"Trial {trial.number + 1} parameters: ")
     logger.info(f"  - hidden_dim: {hidden_dim}")
     logger.info(f"  - num_layers: {num_layers}")
     logger.info(f"  - dropout: {dropout:.4f}")
     logger.info(f"  - learning_rate: {learning_rate:.6f}")
+    logger.info(f"  - batch_size: {batch_size}")
+    logger.info(f"  - max_seq_len: {max_seq_len}")
 
     try:
         # Prepare data
         data_module = KTDataModule(
             data_path=str(PATHS.data),
-            batch_size=TRAINING_CONFIG.batch_size,
-            max_seq_len=TRAINING_CONFIG.max_seq_len,
+            batch_size=batch_size,
+            max_seq_len=max_seq_len,
             val_split=TRAINING_CONFIG.val_split,
             num_workers=TRAINING_CONFIG.num_workers,
             seed=42
@@ -96,14 +100,40 @@ def objective(trial) -> float:
         val_acc = trainer.callback_metrics.get("val_acc")
         
         result = val_loss.item() if val_loss is not None else float('inf')
+        acc_result = val_acc.item() if val_acc is not None else None
         
         # Log trial results
         elapsed_time = time.time() - start_time
         logger.info(f"Trial {trial.number + 1} completed in {elapsed_time:.2f} seconds")
         logger.info(f"  - val_loss: {result:.4f}")
         if val_acc is not None:
-            logger.info(f"  - val_acc: {val_acc.item():.4f}")
+            logger.info(f"  - val_acc: {acc_result:.4f}")
         logger.info(f"  - epochs completed: {trainer.current_epoch + 1}/{TRAINING_CONFIG.max_epochs}")
+        
+        # Save trial results to CSV
+        import csv
+        csv_path = "tuning_results/all_trials.csv"
+        fieldnames = ["trial", "hidden_dim", "num_layers", "dropout", "learning_rate", "batch_size", "max_seq_len", "val_loss", "val_acc"]
+        row = {
+            "trial": trial.number + 1,
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
+            "dropout": dropout,
+            "learning_rate": learning_rate,
+            "batch_size": batch_size,
+            "max_seq_len": max_seq_len,
+            "val_loss": result,
+            "val_acc": acc_result
+        }
+        try:
+            write_header = not os.path.exists(csv_path)
+            with open(csv_path, mode="a", newline="") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(row)
+        except Exception as e:
+            logger.warning(f"Could not write trial results to CSV: {e}")
         
         # Check if we've exceeded the time limit
         if time.time() - start_time > TRIAL_TIMEOUT:
@@ -139,7 +169,7 @@ def main():
     )
     
     # Set number of trials
-    n_trials = 10  # Reduced number of trials
+    n_trials = 30  # Increased number of trials for better search
     logger.info(f"Running {n_trials} trials...")
     
     # Start optimization with progress tracking
@@ -160,12 +190,11 @@ def main():
         print(f"Best hyperparameters: {study.best_params}")
         print(f"Best validation loss: {study.best_value:.6f}")
         
-        # Save best hyperparameters
-        with open(f"tuning_results/best_params_{timestamp}.txt", "w") as f:
-            f.write(f"Best hyperparameters:\n")
-            for param, value in study.best_params.items():
-                f.write(f"{param}: {value}\n")
-            f.write(f"\nBest validation loss: {study.best_value:.6f}\n")
+        # Save best hyperparameters to JSON for use in main.py
+        with open("best_hyperparameters.json", "w") as f:
+            import json
+            json.dump(study.best_params, f, indent=2)
+        print("Best hyperparameters saved to best_hyperparameters.json")
     
     except KeyboardInterrupt:
         elapsed_time = time.time() - start_time

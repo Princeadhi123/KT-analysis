@@ -1,0 +1,8 @@
+{
+  "hidden_dim": 256,
+  "num_layers": 3,
+  "dropout": 0.2669782030048725,
+  "learning_rate": 0.0021988325500661393,
+  "batch_size": 16,
+  "max_seq_len": 25
+}

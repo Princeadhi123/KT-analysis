@@ -6,6 +6,8 @@ import pytorch_lightning as pl
 from data import KTDataModule
 from models import DKT
 from config import MODEL_CONFIG, TRAINING_CONFIG, PATHS
+import json
+import os
 
 def count_unique_skills(data_path: Path) -> int:
     """
@@ -32,13 +34,28 @@ def train_model() -> None:
     # Count unique skills
     num_skills = count_unique_skills(data_path)
     print(f"Number of unique skills: {num_skills}")
-    # Create model
+
+    # Try to load best hyperparameters
+    best_hparams = {}
+    hparam_path = "best_hyperparameters.json"
+    if os.path.exists(hparam_path):
+        with open(hparam_path, "r") as f:
+            best_hparams = json.load(f)
+        print(f"Loaded best hyperparameters from {hparam_path}: {best_hparams}")
+    else:
+        print("No best_hyperparameters.json found, using config defaults.")
+
+    # Helper function to get hyperparameters with fallback
+    def get_param(param_name, default):
+        return best_hparams.get(param_name, default)
+
+    # Create model with loaded or default hyperparameters
     model = DKT(
         num_skills=num_skills,
-        hidden_dim=MODEL_CONFIG.hidden_dim,
-        num_layers=MODEL_CONFIG.num_layers,
-        dropout=MODEL_CONFIG.dropout,
-        learning_rate=TRAINING_CONFIG.learning_rate
+        hidden_dim=get_param("hidden_dim", MODEL_CONFIG.hidden_dim),
+        num_layers=get_param("num_layers", MODEL_CONFIG.num_layers),
+        dropout=get_param("dropout", MODEL_CONFIG.dropout),
+        learning_rate=get_param("learning_rate", TRAINING_CONFIG.learning_rate)
     )
     # Configure trainer with checkpoint callback
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
