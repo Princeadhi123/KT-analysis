@@ -9,7 +9,10 @@ from typing import Dict, Optional
 
 import pandas as pd
 import numpy as np
+from sklearn.decomposition import FactorAnalysis
 from tqdm import tqdm
+from joblib import dump
+import psutil # For memory usage stats
 
 from config import PATHS
 
@@ -17,7 +20,8 @@ from config import PATHS
 class PreprocessingStats:
     num_records: int
     num_users: int
-    num_skills: int
+    num_skills: int # This will now represent num_unique_skills_after_paf or num_factors
+    num_factors: Optional[int] # Number of factors used in PAF
     avg_sequence_length: float
     overall_accuracy: float
     input_file_size_mb: float
@@ -45,6 +49,7 @@ def preprocess_data(input_file: str, output_file: str) -> str:
         Path to saved preprocessed file
     """
     start_time = time.time()
+    mem_before = psutil.Process().memory_info().rss / (1024 * 1024) # Initial memory
     input_path = Path(input_file)
     output_path = Path(output_file)
     if not input_path.exists():
@@ -87,18 +92,105 @@ def preprocess_data(input_file: str, output_file: str) -> str:
     # Sort by user_id and timestamp
     df = df.sort_values(['user_id', 'timestamp'])
 
-    # Create skill mapping
-    skill_to_id = create_skill_mapping(df)
-    id_to_skill = {v: k for k, v in skill_to_id.items()}
-    df['skill_id'] = df['skill_id'].map(skill_to_id).astype(int)
+    # --- Start of PAF Implementation ---
+    # TODO: Make the number of factors configurable
+    NUM_FACTORS = 10
+
+    # Construct user-skill interaction matrix (using original skill IDs)
+    # Ensure 'skill_id' is in a suitable format for pivoting (e.g., not already mapped)
+    print("Constructing user-skill interaction matrix for PAF...")
+    user_skill_matrix = df.pivot_table(
+        index='user_id',
+        columns='skill_id', # Original skill IDs
+        values='correct',
+        fill_value=0        # Fill missing interactions with 0
+    )
+    print(f"User-skill matrix shape: {user_skill_matrix.shape}")
+
+    # Store original skill IDs corresponding to columns in user_skill_matrix
+    original_skill_ids_paf = user_skill_matrix.columns.tolist()
+
+    # Apply Principal Axis Factoring (PAF)
+    print(f"Applying PAF with {NUM_FACTORS} factors...")
+    paf_model = FactorAnalysis(n_components=NUM_FACTORS, random_state=0, tol=0.01, max_iter=1000) # Added tol and max_iter for convergence
+    
+    # Fit PAF to the data (users x skills)
+    # FactorAnalysis expects samples (users) x features (skills)
+    paf_model.fit(user_skill_matrix)
+
+    # Get factor loadings (skills x factors)
+    # model.components_ is [n_factors, n_features], so transpose for [n_features, n_factors]
+    skill_factor_loadings = paf_model.components_.T 
+    print(f"Skill factor loadings shape: {skill_factor_loadings.shape}")
+    
+    # Ensure the order of factor loadings corresponds to original_skill_ids_paf
+    # skill_factor_loadings rows now correspond to original_skill_ids_paf
+
+    # --- Start: New Skill Representation and Mapping ---
+    # 1. Create skill_factor_embeddings: a numpy array of [num_original_skills, num_factors]
+    # The skill_factor_loadings are already in [skills, factors] shape.
+    # The skills here are the columns from user_skill_matrix, which are original_skill_ids_paf
+    skill_factor_embeddings = skill_factor_loadings 
+    
+    # 2. Create original_skill_id_to_factor_idx mapping
+    # This maps the original skill ID (from user_skill_matrix.columns) to an integer index (0 to N-1)
+    # which can be used to retrieve the factor vector from skill_factor_embeddings.
+    original_skill_id_to_factor_idx = {
+        skill_id: idx for idx, skill_id in enumerate(original_skill_ids_paf)
+    }
+    
+    # 3. Update df['skill_id'] to use the new factor_idx
+    # Map original skill IDs in the DataFrame to their new factor_idx.
+    # Skills in df['skill_id'] that were not in user_skill_matrix (e.g., due to no interactions)
+    # will result in NaN. These should be handled (e.g., dropped or imputed).
+    # For now, we assume all skills in df are present in user_skill_matrix.
+    # If a skill was present in df but had no interactions, it wouldn't be a column in user_skill_matrix.
+    df['skill_id'] = df['skill_id'].map(original_skill_id_to_factor_idx)
+    
+    # Handle skills in df that were not part of the PAF model (if any)
+    # These would be skills with no interactions or skills filtered out before PAF.
+    # For simplicity, we'll drop rows with NaN in 'skill_id' which means those skills 
+    # couldn't be mapped to a factor index.
+    original_len = len(df)
+    df.dropna(subset=['skill_id'], inplace=True)
+    if len(df) < original_len:
+        print(f"Dropped {original_len - len(df)} rows due to skills not in PAF model (no interactions).")
+    df['skill_id'] = df['skill_id'].astype(int)
+
+    # num_unique_skills_after_paf will be the number of rows in skill_factor_embeddings
+    num_unique_skills_after_paf = skill_factor_embeddings.shape[0]
+    print(f"Number of unique skills with factor representations: {num_unique_skills_after_paf}")
+    # --- End: New Skill Representation and Mapping ---
 
     # Save mappings
     checkpoints_dir = Path('checkpoints')
     checkpoints_dir.mkdir(exist_ok=True)
-    with (checkpoints_dir / 'skill_mapping.json').open('w') as f:
-        json.dump(skill_to_id, f, indent=2)
-    with (checkpoints_dir / 'id_to_skill_mapping.json').open('w') as f:
-        json.dump(id_to_skill, f, indent=2)
+
+    # Save the new skill representations
+    paf_outputs_dir = checkpoints_dir / 'paf_outputs'
+    paf_outputs_dir.mkdir(exist_ok=True)
+    
+    # Save skill_factor_embeddings (NumPy array)
+    np.save(paf_outputs_dir / 'skill_factor_embeddings.npy', skill_factor_embeddings)
+    
+    # Save original_skill_id_to_factor_idx mapping (JSON)
+    with (paf_outputs_dir / 'original_skill_id_to_factor_idx.json').open('w') as f:
+        # Convert keys to string for JSON compatibility if they are not
+        json.dump({str(k): v for k, v in original_skill_id_to_factor_idx.items()}, f, indent=2)
+
+    # Save the PAF model itself (optional, but good practice)
+    dump(paf_model, paf_outputs_dir / 'paf_model.joblib') 
+
+    # The old skill_mapping.json and id_to_skill_mapping.json are no longer primary.
+    # We might save a simplified id_to_original_skill_id if needed for interpretation.
+    id_to_original_skill_id = {
+        idx: skill_id for skill_id, idx in original_skill_id_to_factor_idx.items()
+    }
+    with (paf_outputs_dir / 'factor_idx_to_original_skill_id.json').open('w') as f:
+        json.dump(id_to_original_skill_id, f, indent=2)
+    
+    print(f"Factor embeddings shape: {skill_factor_embeddings.shape}")
+    print(f"Number of entries in original_skill_id_to_factor_idx: {len(original_skill_id_to_factor_idx)}")
 
     # Save processed data (with compression for large files)
     use_compression = file_size_mb > 50 and output_path.suffix == '.csv'
@@ -114,7 +206,8 @@ def preprocess_data(input_file: str, output_file: str) -> str:
     stats = PreprocessingStats(
         num_records=len(df),
         num_users=df['user_id'].nunique(),
-        num_skills=len(skill_to_id),
+        num_skills=num_unique_skills_after_paf, # Updated to reflect skills with factor embeddings
+        num_factors=NUM_FACTORS,               # Store the number of factors used
         avg_sequence_length=df.groupby('user_id').size().mean(),
         overall_accuracy=df['correct'].mean(),
         input_file_size_mb=file_size_mb,
@@ -208,7 +301,8 @@ def preprocess_data(input_file: str, output_file: str) -> str:
     summary = {
         'num_records': len(df),
         'num_users': df['user_id'].nunique(),
-        'num_skills': len(skill_to_id),
+        'num_skills': num_unique_skills_after_paf, # Updated
+        'num_factors': NUM_FACTORS, # Added
         'avg_sequence_length': df.groupby('user_id').size().mean(),
         'overall_accuracy': df['correct'].mean(),
         'preprocessing_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -223,11 +317,11 @@ def preprocess_data(input_file: str, output_file: str) -> str:
     
     print("\nPreprocessing complete!")
     print(f"- Processed {len(df):,} interactions in {processing_time:.2f} seconds")
-    print(f"- {len(skill_to_id):,} unique skills")
+    print(f"- {num_unique_skills_after_paf:,} unique skills with factor representations (using {NUM_FACTORS} factors)")
     print(f"- {df['user_id'].nunique():,} unique users")
     print(f"- Overall accuracy: {df['correct'].mean():.2%}")
-    print(f"- Memory used: {mem_after - mem_before:.2f} MB")
-    print(f"- Compression ratio: {(file_size_mb / summary['output_file_size_mb']):.2f}x" if use_compression else "")
+    print(f"- Memory used by preprocessing: {mem_after - mem_before:.2f} MB")
+    print(f"- Compression ratio: {(file_size_mb / summary['output_file_size_mb']):.2f}x" if use_compression and summary['output_file_size_mb'] > 0 else "")
     print("\nOutput files:")
     print(f"- Preprocessed data: {output_file}")
     print("- Skill mappings: checkpoints/skill_mapping.json")

@@ -16,18 +16,32 @@ class DKT(pl.LightningModule):
     based on their interaction history with different skills.
     """
     
+import numpy as np # Added for np.load
+
+class DKT(pl.LightningModule):
+    """Deep Knowledge Tracing model with optimized implementation.
+    
+    This model predicts the probability of a student answering correctly
+    based on their interaction history with different skills.
+    It now uses pre-computed PAF skill embeddings.
+    """
+    
     def __init__(
-        self, 
-        num_skills: int, 
-        hidden_dim: int = 128, 
-        num_layers: int = 2, 
-        dropout: float = 0.3, 
+        self,
+        num_outputs: int, # Number of original skills to predict for (len(original_skill_id_to_factor_idx))
+        embedding_dim: int, # Dimensionality of PAF embeddings (num_factors)
+        skill_embeddings_path: str, # Path to 'skill_factor_embeddings.npy'
+        hidden_dim: int = 128, # LSTM hidden dim
+        num_layers: int = 2,
+        dropout: float = 0.3,
         learning_rate: float = 1e-3
     ) -> None:
-        """Initialize the DKT model.
+        """Initialize the DKT model with PAF embeddings.
         
         Args:
-            num_skills: Number of unique skills in the dataset.
+            num_outputs: Number of unique original skills to predict mastery for.
+            embedding_dim: Dimensionality of the skill embeddings (from PAF).
+            skill_embeddings_path: Path to the .npy file containing skill_factor_embeddings.
             hidden_dim: Dimension of hidden states in LSTM.
             num_layers: Number of LSTM layers.
             dropout: Dropout rate for regularization.
@@ -35,13 +49,36 @@ class DKT(pl.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
+
+        # Load PAF embeddings
+        # These are expected to be of shape [num_outputs, embedding_dim]
+        paf_embeddings = torch.tensor(np.load(skill_embeddings_path), dtype=torch.float)
         
-        # Combine skill and correctness into a single embedding
-        self.embedding = nn.Embedding(num_skills * 2, hidden_dim)
+        if paf_embeddings.shape[0] != num_outputs:
+            raise ValueError(
+                f"Mismatch in num_outputs ({num_outputs}) and loaded paf_embeddings rows ({paf_embeddings.shape[0]}). "
+                "num_outputs should be the number of unique skills from original_skill_id_to_factor_idx."
+            )
+        if paf_embeddings.shape[1] != embedding_dim:
+            raise ValueError(
+                f"Mismatch in embedding_dim ({embedding_dim}) and loaded paf_embeddings columns ({paf_embeddings.shape[1]}). "
+                "embedding_dim should be the number of factors from PAF."
+            )
+
+        # Create expanded embedding matrix for (skill, correctness) pairs
+        # Final embedding matrix shape: [num_outputs * 2, embedding_dim]
+        expanded_embeddings = torch.zeros(num_outputs * 2, embedding_dim)
+        for i in range(num_outputs):
+            expanded_embeddings[2*i] = paf_embeddings[i]     # skill_i, incorrect
+            expanded_embeddings[2*i + 1] = paf_embeddings[i] # skill_i, correct
         
+        self.embedding = nn.Embedding(num_outputs * 2, embedding_dim)
+        self.embedding.weight = nn.Parameter(expanded_embeddings, requires_grad=True) # Fine-tune
+
         # Bidirectional LSTM for sequence modeling
+        # Input to LSTM is now the PAF embedding dimension
         self.lstm = nn.LSTM(
-            input_size=hidden_dim,
+            input_size=embedding_dim, 
             hidden_size=hidden_dim // 2,  # Half size for bidirectional
             num_layers=num_layers,
             dropout=dropout if num_layers > 1 else 0,
@@ -50,7 +87,8 @@ class DKT(pl.LightningModule):
         )
         
         self.dropout = nn.Dropout(dropout)
-        self.output = nn.Linear(hidden_dim, num_skills)
+        # Output layer predicts mastery for each of the original skills
+        self.output = nn.Linear(hidden_dim, num_outputs) 
         self.learning_rate = learning_rate
 
     def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
